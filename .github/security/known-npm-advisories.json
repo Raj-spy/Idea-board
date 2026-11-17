@@ -1,0 +1,18 @@
+{
+  "advisories": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "version": "4.0.7",
+      "affectedPackages": ["picomatch", "fdir", "tinyglobby", "vite"],
+      "lockedVersions": {
+        "picomatch": ["4.0.7"],
+        "fdir": ["6.5.0"],
+        "tinyglobby": ["0.2.17"],
+        "vite": ["6.4.6"]
+      },
+      "expiresOn": "2026-12-18",
+      "reason": "Existing high-severity ReDoS advisory in the locked Vite development-tool dependency tree. No patched picomatch release was available during review; npm's suggested Vite 6.2.7 remedy is a downgrade and is not accepted. The full npm audit report remains an artifact and the exception expires for mandatory re-review."
+    }
+  ]
+}
