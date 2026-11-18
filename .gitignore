@@ -13,3 +13,6 @@ coverage/
 .coverage
 .DS_Store
 Thumbs.db
+
+# Local security scan reports
+downloads/

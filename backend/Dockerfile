@@ -1,28 +1,27 @@
 FROM python:3.12-slim-trixie AS base
 
-RUN python -m pip install --no-cache-dir --upgrade pip==26.3
+RUN apt-get update \
+    && apt-get upgrade --yes --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --upgrade pip==26.3
 
 FROM base AS dependencies
-
 
 WORKDIR /build
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-
 FROM base AS runtime
-
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
 WORKDIR /app
-RUN apt-get update \
-    && apt-get upgrade --yes --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 app \
+
+RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+
 COPY --from=dependencies /install /usr/local
 COPY --chown=app:app app ./app
 
