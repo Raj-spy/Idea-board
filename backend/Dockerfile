@@ -1,10 +1,17 @@
-FROM python:3.12-slim-trixie AS dependencies
+FROM python:3.12-slim-trixie AS base
+
+RUN python -m pip install --no-cache-dir --upgrade pip==26.3
+
+FROM base AS dependencies
+
 
 WORKDIR /build
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM python:3.12-slim-trixie AS runtime
+
+FROM base AS runtime
+
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
