@@ -1,3 +1,4 @@
+
 # IdeaBoard Platform
 
 IdeaBoard is a small idea-sharing application and an AWS infrastructure engineering exercise. The application runs locally with Docker Compose; Terraform defines reusable AWS networking, EKS, and RDS resources, but no cloud resources have been deployed.
@@ -6,25 +7,26 @@ IdeaBoard is a small idea-sharing application and an AWS infrastructure engineer
 
 ```mermaid
 flowchart LR
-  Browser -->|localhost:8080| Nginx
-  Nginx -->|/api and /health| FastAPI
-  FastAPI --> PostgreSQL
-  PostgreSQL --> PostgreSQLVolume[(Persistent Compose volume)]
+    Browser -->|localhost:8080| Nginx
+    Nginx -->|/api and /health| FastAPI
+    FastAPI --> PostgreSQL
+    PostgreSQL --> PostgreSQLVolume[(Persistent Compose volume)]
 
-  subgraph AWS["AWS target architecture (Terraform only; not deployed)"]
-    Internet --> IGW[Internet Gateway]
-    IGW --> Public[Public subnets: load balancers and NAT]
-    Public --> NAT[NAT Gateway(s)]
-    NAT --> Private[Private subnets and private AWS endpoints]
-    Private --> EKS[EKS control plane and managed worker nodes]
-    Private --> RDS[(Encrypted private PostgreSQL RDS)]
-    EKS -->|TCP 5432 from worker security group only| RDS
-  end
+    subgraph AWS["AWS target architecture (Terraform only; not deployed)"]
+        Internet --> IGW[Internet Gateway]
+        IGW --> Public["Public subnets: load balancers and NAT"]
+        Public --> NAT["NAT Gateways"]
+        NAT --> Private["Private subnets and private AWS endpoints"]
+        Private --> EKS["EKS control plane and managed worker nodes"]
+        Private --> RDS[(Encrypted private PostgreSQL RDS)]
+        EKS -->|TCP 5432 from worker security group only| RDS
+    end
 
-  CI[GitHub Actions] --> Tests[Tests, builds, security scans, Terraform validation]
-  CI -->|successful publish gate| GHCR[GitHub Container Registry]
-  CI -. failed run .-> AI[Optional sanitized GitHub Models analysis]
+    CI[GitHub Actions] --> Tests["Tests, builds, security scans, Terraform validation"]
+    CI -->|Successful publish gate| GHCR[GitHub Container Registry]
+    CI -. Failed run .-> AI["Optional sanitized GitHub Models analysis"]
 ```
+
 
 ### Application
 

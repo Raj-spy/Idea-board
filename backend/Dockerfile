@@ -3,7 +3,7 @@ FROM python:3.12-slim-trixie AS base
 RUN apt-get update \
     && apt-get upgrade --yes --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --upgrade pip==26.3 setuptools==78.1.1
+    && python -m pip install --no-cache-dir --upgrade pip==26.3 setuptools==84.1.0 wheel==0.46.2
 
 FROM base AS dependencies
 
