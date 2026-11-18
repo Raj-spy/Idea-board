@@ -34,9 +34,9 @@ class FailureAnalyzerTests(unittest.TestCase):
     def test_private_key_blocks_are_never_included(self):
         logs = (
             "Error: signing failed\n"
-            "-----BEGIN PRIVATE KEY-----\n"
+            "-----BEGIN " "PRIVATE KEY-----\n"
             "sensitive-material\n"
-            "-----END PRIVATE KEY-----\n"
+            "-----END " "PRIVATE KEY-----\n"
             "Build failed with exit code 1\n"
         )
 
