@@ -1,53 +1,108 @@
 # IdeaBoard Platform
 
-IdeaBoard is a focused idea-sharing application: users can submit ideas and retrieve the persisted board. The application foundation and a Docker Compose deployment are implemented with a React frontend, FastAPI backend, and PostgreSQL.
+IdeaBoard is a small idea-sharing application and an AWS infrastructure engineering exercise. The application runs locally with Docker Compose; Terraform defines reusable AWS networking, EKS, and RDS resources, but no cloud resources have been deployed.
 
 ## Architecture
 
-- **Frontend:** React 18, Vite, JavaScript, and Tailwind CSS. The UI calls the REST API through a small, separate API client.
+```mermaid
+flowchart LR
+  Browser -->|localhost:8080| Nginx
+  Nginx -->|/api and /health| FastAPI
+  FastAPI --> PostgreSQL
+  PostgreSQL --> PostgreSQLVolume[(Persistent Compose volume)]
+
+  subgraph AWS["AWS target architecture (Terraform only; not deployed)"]
+    Internet --> IGW[Internet Gateway]
+    IGW --> Public[Public subnets: load balancers and NAT]
+    Public --> NAT[NAT Gateway(s)]
+    NAT --> Private[Private subnets and private AWS endpoints]
+    Private --> EKS[EKS control plane and managed worker nodes]
+    Private --> RDS[(Encrypted private PostgreSQL RDS)]
+    EKS -->|TCP 5432 from worker security group only| RDS
+  end
+
+  CI[GitHub Actions] --> Tests[Tests, builds, security scans, Terraform validation]
+  CI -->|successful publish gate| GHCR[GitHub Container Registry]
+  CI -. failed run .-> AI[Optional sanitized GitHub Models analysis]
+```
+
+### Application
+
+- **Frontend:** React 18, Vite, JavaScript, and Tailwind CSS.
 - **Backend:** Python 3.12+, FastAPI, Pydantic, SQLAlchemy 2, and psycopg 3.
-- **Database:** PostgreSQL. SQLAlchemy creates the `ideas` table through an explicit initialization command; the API does not perform schema changes on startup.
-- **Runtime:** Environment-based configuration, configurable browser origins, health checks, and no cloud-specific application dependencies.
-- **Container deployment:** Multi-stage frontend/backend image builds, an unprivileged Nginx reverse proxy, a one-shot database initializer, private service networks, and a persistent PostgreSQL volume.
+- **Database:** PostgreSQL; schema initialization is a separate command/container.
+- **Application wiring:** The frontend uses a separate API client; backend settings and browser origins are environment-configurable, with no cloud-specific application dependencies.
+- **Local runtime:** Docker Compose, private service networks, Nginx reverse proxy, health checks, and a persistent PostgreSQL volume.
+
+### AWS infrastructure scope
+
+Development and production roots reuse the same Terraform modules:
+
+```text
+infrastructure/
+  modules/
+    networking/       # VPC, subnets, IGW, NAT, routes and private AWS endpoints
+    kubernetes/       # EKS, KMS secrets encryption, nodes, IAM and CNI Pod Identity
+    database/         # Private RDS PostgreSQL, subnet group and restricted SG
+  environments/
+    development/      # Cost-conscious settings and example variables
+    production/       # Multi-AZ and deletion-protected example settings
+  README.md
+```
+
+Each environment root configures the AWS provider and passes its values into those modules. GCP support, cloud portability, Kubernetes application deployment, and public ingress are **not implemented**. This AWS-only infrastructure is not a deployment.
 
 ## Repository structure
 
 ```text
+.github/
+  scripts/                 # CI helpers and focused tests, including failure-log sanitization
+  security/                # Narrow, expiring npm advisory policy
+  workflows/               # CI, GHCR publishing, optional failure analysis
 backend/
   app/
-    api/routes/       # Idea and health endpoints
-    config.py         # Environment-backed settings
-    database.py       # SQLAlchemy engine and session dependency
-    init_db.py        # Explicit schema initialization
-    models.py         # SQLAlchemy models
-    schemas.py        # Pydantic request/response schemas
-    main.py           # FastAPI application
-  tests/              # Pytest API tests (SQLite test database)
+    api/routes/            # Idea and health endpoints
+    config.py              # Environment-backed settings
+    database.py            # SQLAlchemy engine and session dependency
+    init_db.py             # Explicit schema initialization
+    models.py              # SQLAlchemy models
+    schemas.py             # Pydantic request/response schemas
+    main.py                # FastAPI application
+  tests/                   # Pytest API tests using SQLite
   requirements.txt
 frontend/
-  Dockerfile          # Vite build and unprivileged Nginx runtime
-  nginx.conf          # Static hosting and API reverse proxy
   src/
-    api/              # HTTP client
-    App.jsx           # Idea board UI
+    api/                   # API client
+    App.jsx                # Idea board UI
     styles.css
+  Dockerfile               # Vite build and unprivileged Nginx runtime
+  nginx.conf               # Static hosting and API reverse proxy
   package.json
   package-lock.json
-  vite.config.js
 compose.yaml
 .env.example
+infrastructure/
+  modules/                 # Reusable networking, EKS, and RDS modules
+  environments/            # Development and production roots
+  README.md
 ```
 
-## Prerequisites
+## Local application setup
 
-- Python 3.12 or newer
-- Node.js 20 or newer and npm
-- PostgreSQL 14 or newer for host-based development (Compose provides PostgreSQL)
-- Docker Desktop or Docker Engine with the Compose v2 plugin (for containerized operation)
+### Prerequisites
 
-## Environment configuration
+- Python 3.12 or newer.
+- Node.js 20 or newer and npm.
+- PostgreSQL 14 or newer for host-based development; Compose provides PostgreSQL.
+- Docker Desktop or Docker Engine with the Compose v2 plugin for containerized operation.
 
-Copy `.env.example` to `.env` in the repository root and set the PostgreSQL values. `.env` is ignored by Git.
+### Environment configuration
+
+Copy `.env.example` to `.env` in the repository root and set a fresh local database password. `.env` is ignored by Git.
+
+```powershell
+Copy-Item .env.example .env
+```
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -55,21 +110,23 @@ Copy `.env.example` to `.env` in the repository root and set the PostgreSQL valu
 | `POSTGRES_PORT` | No | `5432` | PostgreSQL server port |
 | `POSTGRES_DB` | No | `ideaboard` | Database name |
 | `POSTGRES_USER` | No | `ideaboard` | Database user |
-| `POSTGRES_PASSWORD` | Yes | — | Database password |
+| `POSTGRES_PASSWORD` | Yes | None | Database password |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed browser origins |
-| `VITE_API_BASE_URL` | No | Empty | Frontend API origin; empty uses the Vite proxy in development |
+| `VITE_API_BASE_URL` | No | Empty | Frontend API origin; empty uses the Vite development proxy |
 | `APP_PORT` | No | `8080` | Host loopback port for the Compose frontend |
 
-Create the PostgreSQL database and user before initializing the schema. For example, from a PostgreSQL administrator session:
+Create the PostgreSQL user and database before initializing the schema when using a host-installed PostgreSQL server. For example, in a PostgreSQL administrator session:
 
 ```sql
 CREATE USER ideaboard WITH PASSWORD 'replace-with-a-local-password';
 CREATE DATABASE ideaboard OWNER ideaboard;
 ```
 
-## Local development
+Use the same database values in `.env`. The SQL password above is only an example; do not reuse it.
 
-From the repository root, create and activate a virtual environment, then install backend dependencies:
+### Host-based development
+
+From the repository root in PowerShell, create and activate a virtual environment and install backend dependencies:
 
 ```powershell
 py -3.12 -m venv backend\.venv
@@ -77,7 +134,7 @@ backend\.venv\Scripts\Activate.ps1
 python -m pip install -r backend\requirements.txt
 ```
 
-Initialize the database and start the API:
+Initialize the database and start FastAPI:
 
 ```powershell
 $env:PYTHONPATH = "backend"
@@ -93,26 +150,50 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. The Vite development server proxies `/api` and `/health` requests to `http://localhost:8000`. Configure `VITE_API_BASE_URL` at frontend build time to use another API origin.
+Open <http://localhost:5173>. Vite proxies `/api` and `/health` to `http://localhost:8000`. Set `VITE_API_BASE_URL` at frontend build time to use another API origin. The backend reads the repository-root `.env` file; make sure `CORS_ORIGINS` includes the browser origin when calling the API directly.
 
-## Docker Compose
+### Docker Compose
 
-Docker Compose runs PostgreSQL, the API, a one-shot schema initializer, and the Nginx-served frontend. Only the frontend is published to the host, bound to loopback; the API and database have no host port mappings. The frontend reverse-proxies `/api/`, `/health`, `/docs`, and `/openapi.json` to the backend over a private application network. PostgreSQL is reachable only from the backend over a separate private network.
+Compose runs PostgreSQL, the API, a one-shot schema initializer, and the Nginx-served frontend:
 
-1. Copy `.env.example` to `.env` in the repository root and replace `POSTGRES_PASSWORD` with a strong local password. Do not commit `.env`.
-2. From the repository root, build and start the services:
+```powershell
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps
+```
 
-   ```powershell
-   docker compose up --build -d
-   docker compose ps
-   ```
+Open <http://localhost:8080> (or the configured `APP_PORT`). Compose waits for PostgreSQL health, runs `python -m app.init_db` once, and waits for backend health before starting the frontend. The one-shot `db-init` container exits after successful initialization.
 
-   Compose waits for PostgreSQL to become healthy, runs the existing `python -m app.init_db` process once, and waits for the backend health check before starting the frontend.
-3. Open <http://localhost:8080>. The port is bound to `127.0.0.1`; set `APP_PORT` in `.env` to choose another local port.
+The frontend is published only on `127.0.0.1`; the API and PostgreSQL have no host port mappings. Nginx proxies `/api/`, `/health`, `/docs`, and `/openapi.json` to the backend over the private application network. PostgreSQL is reachable by the backend on a separate private database network. Compose sets the application containers' PostgreSQL host to `db:5432`. If the password contains a dollar sign, single-quote it in `.env` so Compose treats it literally.
 
-Compose overrides `POSTGRES_HOST` and `POSTGRES_PORT` for the application containers to use the private `db:5432` address. If a password contains a dollar sign, quote its value with single quotes in `.env` so Compose treats it literally.
+The backend and frontend images run as non-root users. The backend has a read-only root filesystem and dropped Linux capabilities; the frontend uses unprivileged Nginx. Both services use no-new-privileges and a temporary `/tmp` filesystem. Health checks gate startup. The database uses the named `postgres-data` volume:
 
-Use the same REST API through the reverse proxy:
+```powershell
+docker compose logs -f
+docker compose down
+```
+
+`docker compose down` stops and removes the containers and networks but preserves local ideas in `postgres-data`. **This volume contains persisted application data.** Delete it only when intentionally removing that data:
+
+```powershell
+docker compose down --volumes
+```
+
+This phase uses SQLAlchemy model creation and the explicit initializer rather than a migration framework. To change the schema, update the models and initializer; no automatic schema migration runs at API startup.
+
+## API
+
+Interactive OpenAPI documentation is available at <http://localhost:8080/docs> through Compose or <http://localhost:8000/docs> when running the backend directly. The OpenAPI document is at `/openapi.json` on either origin.
+
+| Method | Endpoint | Success response | Behavior |
+| --- | --- | --- | --- |
+| `GET` | `/api/ideas` | `200 OK`, array of ideas | Returns newest first, ordered by creation time and then ID; database errors return `503` |
+| `POST` | `/api/ideas` | `201 Created`, an idea | Creates an idea from a JSON body containing `content` |
+| `GET` | `/health` | `200 OK` | Executes a database connectivity check |
+
+An idea response contains `id` (integer), `content` (string), and `created_at` (date-time). `POST /api/ideas` trims surrounding whitespace, rejects blank content, and accepts at most 1,000 characters. Invalid JSON or content returns `422 Unprocessable Entity`. A database error returns `503 Service Unavailable`; the health endpoint returns `503` when PostgreSQL is unavailable.
+
+Example request through Compose:
 
 ```powershell
 Invoke-RestMethod -Method Post `
@@ -124,107 +205,116 @@ Invoke-RestMethod -Method Get -Uri http://localhost:8080/api/ideas
 Invoke-RestMethod -Method Get -Uri http://localhost:8080/health
 ```
 
-Inspect service logs with `docker compose logs -f`. Stop the services with `docker compose down`; the named `postgres-data` volume is retained across container recreation. **This volume contains persisted ideas.** Remove it only when intentionally deleting local data with `docker compose down --volumes`.
-
-The backend and frontend images run as non-root users. The backend has a read-only root filesystem and dropped Linux capabilities; the frontend uses the unprivileged Nginx image. Container health checks gate service startup. To apply a changed application schema in this phase, update the existing SQLAlchemy models and initializer; this setup does not add a separate migration framework.
-
-## API
-
-Interactive OpenAPI documentation is available at <http://localhost:8080/docs> with Compose, or <http://localhost:8000/docs> when running the backend directly.
-
-| Method | Endpoint | Behavior |
-| --- | --- | --- |
-| `GET` | `/api/ideas` | Returns ideas, newest first |
-| `POST` | `/api/ideas` | Creates an idea; returns `201 Created` |
-| `GET` | `/health` | Checks database connectivity; returns `503` if unavailable |
-
-Idea content is trimmed, must not be blank, and is limited to 1000 characters. Example:
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8000/api/ideas `
-  -ContentType 'application/json' `
-  -Body '{"content":"Make it easier to share ideas"}'
-
-Invoke-RestMethod -Method Get -Uri http://localhost:8000/api/ideas
-```
+The same API is available directly on `http://localhost:8000` during host-based development. The application does not currently implement user authentication.
 
 ## Testing and build
 
-Run backend tests from the repository root:
+Backend tests use an isolated in-memory SQLite database and do not require PostgreSQL:
 
 ```powershell
 $env:PYTHONPATH = "backend"
 python -m pytest backend\tests
 ```
 
-Build the frontend:
+Test the failure-log sanitizer separately:
+
+```powershell
+python -m unittest discover -s .github\scripts -p "test_failure_analyzer.py"
+```
+
+Build the frontend using the committed lockfile:
 
 ```powershell
 Set-Location frontend
+npm ci
 npm run build
 ```
 
-Backend tests use an isolated in-memory SQLite database and do not require a running PostgreSQL server. The PostgreSQL health check and live API/database behavior require a configured PostgreSQL instance.
+Docker Compose integration tests require a running Docker engine and exercise the frontend proxy, database health, idea creation/listing, validation, and persistence. The CI workflow creates and removes its own isolated stack and volume; do not point that test at a stack whose data you want to keep.
 
-## CI/CD with GitHub Actions
+## Terraform
 
-The workflows validate changes and publish container images; they do not deploy to a cloud environment.
+See [infrastructure/README.md](infrastructure/README.md) for module details, networking/security decisions, cost considerations, and Terraform commands.
+
+Terraform prerequisites: Terraform **1.11+**, AWS CLI credentials with only the required infrastructure permissions, and a region that supports the selected EKS and RDS versions. `terraform.tfvars.example` files contain non-secret sample values; copy one to `terraform.tfvars` and adjust region, supported versions, AZs, and CIDRs. The `infrastructure/.gitignore` excludes local tfvars, state, and provider caches.
+
+Supply the RDS master password only as an ephemeral environment variable (never in a tfvars file):
+
+```powershell
+$secret = Read-Host "RDS master password" -AsSecureString
+$env:TF_VAR_db_password = [System.Net.NetworkCredential]::new("", $secret).Password
+```
+
+Use the development root for validation and planning:
+
+```powershell
+terraform -chdir=infrastructure/environments/development init -backend=false
+terraform -chdir=infrastructure/environments/development validate
+terraform -chdir=infrastructure/environments/development plan -var-file=terraform.tfvars
+```
+
+Production uses the same module sources and has its own variable file and state root. Before any real production plan, configure a secured remote state backend and confirm costs, regional service versions, subnet ranges, and IAM permissions. No `terraform apply` or cloud provisioning has been performed for this repository.
+
+## CI/CD
+
+The GitHub Actions workflows validate the application, containers, dependencies, secrets, and Terraform. They do not deploy to AWS.
 
 ```mermaid
 flowchart LR
   PR[Pull request to main] --> CI[CI validation]
   Push[Push to main] --> CI
   Manual[Manual CI dispatch] --> CI
-  CI --> Tests[Backend tests and frontend build]
-  CI --> Compose[Compose validation and image builds]
-  CI --> Integration[PostgreSQL and API integration test]
-  CI --> Security[Dependency, image, and secret scans]
-  Push --> Publish[Publish workflow]
+  CI --> App[Backend tests and frontend build]
+  CI --> Compose[Compose checks and integration test]
+  CI --> Images[Container builds and security scans]
+  CI --> Infra[Terraform validation and configuration scan]
+  Push --> Publish[GHCR publish workflow]
   Manual --> Publish
-  Publish --> Gate[Reusable CI and security checks]
+  Publish --> Gate[Reusable CI must succeed]
   Gate --> GHCR[GHCR images with SHA tags]
+  CI -. failed run on main .-> AI[Optional sanitized AI analysis]
 ```
 
-### Workflows and validation
+### Workflows and jobs
 
-- **`.github/workflows/ci.yaml`** runs for pull requests targeting `main`, pushes to `main`, and manual dispatch. It is also reusable by the publishing workflow. Backend validation installs `backend/requirements.txt`, runs pytest, and uploads JUnit XML. Frontend validation uses `npm ci` and `npm run build`; there are currently no lint or type-check scripts in `frontend/package.json`.
-- CI validates `compose.yaml` using temporary non-production values, builds both images without pushing, then runs the existing Compose stack in an isolated job. The integration checks wait for service health, request the frontend and proxied `/health`, create and retrieve an idea, and assert blank content returns HTTP 422. Failure logs are collected and the CI-only containers and volume are always removed.
-- Security jobs run `pip-audit` against backend requirements, `npm audit` against the committed lockfile, GitHub dependency review for new pull-request vulnerabilities, Gitleaks over repository history, and Trivy against both built runtime images. Trivy scans `UNKNOWN`, `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL` findings and uploads SARIF when repository support and permissions allow. JSON/SARIF and pytest reports are retained as workflow artifacts.
-- **`.github/workflows/docker-publish.yaml`** runs on pushes to `main` or manual dispatch. It reuses the full CI workflow and publishes only after that workflow succeeds; manual runs from non-default branches do not publish. Pull requests never publish images.
+- **`.github/workflows/ci.yaml`** runs for pull requests targeting `main`, pushes to `main`, and manual dispatch. It is also reusable by the publishing workflow.
+- **Backend tests** install `backend/requirements.txt`, run `pytest backend/tests`, run the AI failure-log redaction tests, and upload JUnit XML. The backend tests use an in-memory SQLite database.
+- **Frontend build** runs `npm ci` and `npm run build` against the committed lockfile.
+- **Compose validation and integration** first check the Compose configuration with temporary CI-only credentials. The integration job starts an isolated PostgreSQL/API/frontend stack, waits for health, checks the frontend and proxied `/health`, creates and retrieves an idea, verifies blank content returns HTTP 422, collects logs on failure, and always removes its own test stack and volume.
+- **Docker build** builds backend and frontend images without publishing them.
+- **Terraform validation** installs Terraform 1.17.2, runs `terraform fmt -check -recursive infrastructure`, initializes both environment roots with `-backend=false`, validates them, and runs a Trivy configuration scan for HIGH/CRITICAL findings. This does not plan or provision AWS resources.
+- **Dependency and secret checks** run `pip-audit` for Python requirements, `npm audit` through the repository's narrow policy helper, GitHub Dependency Review for pull requests, and Gitleaks over full repository history. Dependency and pytest reports are uploaded as artifacts.
+- **Container security** scans the built backend and frontend runtime images with Trivy for `UNKNOWN`, `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL` vulnerabilities. The JSON reports and SARIF files are uploaded; SARIF publication is best-effort, while the image scan itself remains a required gate. The workflow does not broadly ignore unfixed findings.
 
-### npm advisory and security gates
+### Dependency and vulnerability policy
 
-The current npm lockfile contains **GHSA-fc5q-39xc-vjpf**, a HIGH-severity ReDoS advisory affecting transitive `picomatch@4.0.7` in the Vite tooling dependency tree (also reflected by affected `fdir`, `tinyglobby`, and Vite entries in `npm audit`). The scan report is uploaded and its advisory is listed in the job summary. The repository does not downgrade Vite or rewrite the lockfile to clear the finding.
+The npm lockfile contains **GHSA-fc5q-39xc-vjpf**, a HIGH-severity ReDoS advisory in the locked Vite development-tool dependency tree. The exact exception in `.github/security/known-npm-advisories.json` is limited to the currently locked versions of `picomatch` 4.0.7, `fdir` 6.5.0, `tinyglobby` 0.2.17, and Vite 6.4.6, and expires on **2026-12-18**. The full npm report remains an artifact. The helper fails on CRITICAL findings, other HIGH findings, changed locked versions, or an expired exception; the exception is not an ignore rule. Review the report and replace the exception with a compatible patched release before its expiry. The separate pull-request dependency review blocks newly introduced HIGH/CRITICAL advisories.
 
-`.github/security/known-npm-advisories.json` records a temporary, exact-version exception through **2026-12-18**. It applies only to the named advisory and the currently locked affected package versions. The audit helper fails on every CRITICAL finding, every other HIGH finding, a changed lock version, or an expired exception. The pull-request dependency review separately blocks newly introduced HIGH/CRITICAL advisories. The exception is not an ignore rule: the full npm report remains available, and re-review or a patched compatible release is required before expiry. The exception does not apply to Trivy or Python findings; those scans fail on reported findings.
+The most recent observed CI run before these worktree changes was [run 44254802419](https://github.com/Raj-spy/Idea-board/actions/runs/44254802419), commit `0d5ae47` on 2026-11-18. Application tests/builds, dependency audits, Compose checks, and image builds passed, but the Trivy image vulnerability gate failed and GHCR publishing was skipped. Its backend report contained 221 vulnerability entries (48 HIGH, 93 MEDIUM, 66 LOW, 14 UNKNOWN, and no CRITICAL entries); the frontend report had no findings. The backend findings included Debian Trixie packages without a fixed version at scan time and setuptools 70.3.0. The backend Dockerfile now pins setuptools 78.1.1, the reported fix version, but the Trivy image scan has not been rerun on this worktree. The older CI failure is not a successful CI or release claim.
 
-The latest local `pip-audit` run also reported **9 known advisories across `python-dotenv==1.0.1`, `pytest==8.3.5`, and `starlette==0.46.2`** (IDs: `PYSEC-2026-2270`, `PYSEC-2026-1845`, `PYSEC-2026-161`, `PYSEC-2026-249`, `PYSEC-2026-248`, `PYSEC-2026-1942`, `PYSEC-2026-1941`, `PYSEC-2026-2281`, and `PYSEC-2026-2280`). The report lists upstream fix versions, but this phase does not change application dependencies; in particular, the Starlette fixes require checking compatibility with the pinned FastAPI version. The Python audit job intentionally fails while findings remain, and the complete JSON report is uploaded. `pip-audit` reports advisories without a severity classification here; unlike GitHub Dependency Review, it does not distinguish newly introduced findings from existing ones.
+### GHCR publishing
 
-Local Trivy **0.64.1** scans of the built images on 2026-11-18 also found unresolved container vulnerabilities: the backend OS package scan reported 356 entries (99 HIGH, 2 CRITICAL), its Python package scan reported 15 (3 HIGH), and the frontend OS package scan reported 288 (78 HIGH, 4 CRITICAL). Examples included `CVE-2025-7458` in backend SQLite, `CVE-2023-45853` in backend zlib, and `CVE-2026-42945` in frontend Nginx. These local results are not a GitHub Actions run. The workflow scans all listed severities without ignoring unfixed findings, emits SARIF, and fails the gate on findings; therefore image publication is expected to remain blocked until the vulnerable dependencies/base images are reviewed and updated.
-
-### GHCR images
-
-The publish workflow derives a lowercase GHCR namespace from the repository metadata and builds frontend and backend images separately:
+**`.github/workflows/docker-publish.yaml`** runs on pushes to `main` and manual dispatch. It reuses the full CI workflow and publishes only when that gate succeeds and the ref is the default branch. The publish job alone receives `packages: write`; it logs in with the job-scoped `GITHUB_TOKEN`, derives a lowercase namespace, and builds the frontend and backend images separately:
 
 - `ghcr.io/<owner>/<repository>/frontend`
 - `ghcr.io/<owner>/<repository>/backend`
 
-Each image receives an immutable `sha-<full-commit-sha>` tag; `latest` is added only for the default-branch publication. OCI metadata labels, Buildx GitHub Actions cache, an SBOM, and maximum-mode provenance are generated. Authentication uses the job-scoped `GITHUB_TOKEN`; no personal access token or production secret is required.
+Each image receives a full commit SHA tag; `latest` is added for default-branch publication. The workflow generates OCI labels, an SBOM, and maximum-mode build provenance. Pull requests do not publish images, and this workflow does not deploy to AWS. Repository Actions and package permissions must allow the workflow token to publish.
 
-### Repository configuration and run inspection
+### Optional AI failure analysis
 
-The workflows target the observed default branch, `main`. Publishing requires Actions to be enabled and the repository's workflow token to have **read repository contents** and **write packages** (the workflow grants `packages: write` only to the publish job). SARIF upload additionally needs `security-events: write` and GitHub code-scanning/Security support; SARIF upload is best-effort, while the Trivy scan itself remains a required gate. Gitleaks uses only the automatically provided read-scoped workflow token.
+**`.github/workflows/failure-analysis.yaml`** runs after a completed, failed `CI` workflow on `main`. It checks out the trusted default-branch analyzer and uses read-only Actions access to retrieve failed job logs. The analyzer selects error-like lines, excludes environment assignment lines and private-key blocks, redacts common token, credential, URL, and authorization patterns, and sends only bounded diagnostics to GitHub Models. Complete logs and environment dumps are not sent. The prompt treats logs as untrusted data and asks only for a likely cause, evidence, and safe remediation checks.
 
-Review individual jobs and downloadable reports under the repository's **Actions** tab. A successful local validation is not evidence that a GitHub Actions run or GHCR publication has succeeded; those require a run on GitHub with the repository's permissions.
+Configure the repository Actions secret `GH_MODELS_TOKEN` with GitHub Models inference access to enable analysis. If it is absent, the job records a skip and succeeds; service, permission, or API failures are non-blocking. When configured, the token is used as the HTTPS authorization credential for GitHub Models and is not included in the prompt body. The response is advisory only: it never runs commands, changes files, or applies infrastructure.
 
 ### Reproduce checks locally
 
-From the repository root:
+From the repository root in PowerShell:
 
 ```powershell
 $env:PYTHONPATH = "backend"
 python -m pytest backend\tests
+python -m unittest discover -s .github\scripts -p "test_failure_analyzer.py"
 python -m pip install pip-audit==2.9.0
 pip-audit --requirement backend\requirements.txt
 
@@ -247,21 +337,30 @@ docker compose --env-file $envFile -p ideaboard-ci-local config --quiet
 docker compose --env-file $envFile -p ideaboard-ci-local up --build --detach --wait
 ```
 
-To reproduce the Compose integration checks, run the frontend, `/health`, POST, GET, and blank-content requests against `http://localhost:18080` as in the workflow. Then remove only this uniquely named local test stack and its test data:
+To reproduce the CI integration checks, send the frontend, `/health`, POST, GET, and blank-content requests documented above to `http://localhost:18080`. Then remove only this test stack and its disposable database:
 
 ```powershell
 docker compose --env-file $envFile -p ideaboard-ci-local down --volumes --remove-orphans
 Remove-Item -LiteralPath $envFile
 ```
 
-Do not use the test project name for any stack containing data you want to keep. The committed `.env.example` value is a placeholder, not a credential. `npm audit` currently exits non-zero because of the documented GHSA; the workflow applies only its narrow, expiring exception. Python audit findings and Trivy findings are not suppressed.
+Do not use the test project name for any stack with data you want to keep. `npm audit` exits non-zero for the documented GHSA; the workflow applies only its exact, expiring exception. Python and Trivy findings are not suppressed.
 
-## Implementation status
+### Verification status for this worktree
 
-Implemented: idea creation and listing, input validation, PostgreSQL persistence, database connectivity health check, configurable CORS/API URL, structured backend logs, API documentation, frontend loading/empty/error/success states, backend API tests, multi-stage Dockerfiles, unprivileged Nginx reverse proxy, Compose health checks, and persistent database storage.
+- Local verification passed: 6 backend tests, 4 analyzer tests, frontend build, isolated Compose integration (including database restart persistence), Terraform formatting, and Trivy configuration scanning (0 HIGH/CRITICAL findings).
+- Both Terraform environment configurations passed validation in isolated copies with AWS provider 6.73.0. Direct local initialization against the repository lockfiles was blocked by the WSL provider package/checksum setup; CI should confirm clean initialization with the committed lockfiles.
+- The local container vulnerability scan was not completed because downloading Trivy's vulnerability database was too slow in this environment. No AWS plan, apply, deployment, commit, or push was performed.
 
-Not implemented: Kubernetes, Helm, Terraform, cloud deployment, AI deployment risk analysis, monitoring integrations, authentication, and automated database migrations.
+## Security, cost, and limitations
 
-## Future engineering phases
+- RDS is encrypted, private, placed in private subnets, protected by backups, and accepts PostgreSQL traffic only from the EKS worker security group. No database port is exposed publicly.
+- EKS worker nodes are private and use VPC endpoints for AWS API access. Their security group permits VPC traffic and blocks unrestricted internet egress; mirror external application images to ECR before EKS deployment, or design a separately reviewed egress path. The Kubernetes API endpoint is private-only; administration requires a host connected to the VPC. The CNI policy is assigned through EKS Pod Identity rather than the worker-node role.
+- Development uses one NAT gateway, a single-AZ RDS instance, smaller nodes, and no deletion protection to reduce example costs. Production examples use per-AZ NAT, Multi-AZ RDS, longer backups, and deletion protection. Both remain billable AWS designs if deployed.
+- EKS, EC2, NAT gateways, interface endpoints, RDS, storage, snapshots, and data transfer can incur material costs. Review an AWS estimate before deployment.
+- Terraform currently uses local state unless a remote backend is configured. Do not use local state for team/production operations. Final RDS snapshots persist and the configured snapshot identifier must be managed before repeating a database teardown.
+- The application is not deployed to EKS, and there is no Helm chart, Terraform remote backend, public load-balancer application ingress, AWS/GCP deployment, authentication, automated schema migration system, or monitoring integration.
 
-Kubernetes, Helm, Terraform, and cloud deployment remain separate future phases.
+## Future improvements
+
+Configure encrypted remote Terraform state and locking; deploy the application to EKS with Helm and managed secret delivery; add a public ingress/TLS design; define and validate a cloud-agnostic interface only when a second provider is implemented; and resolve outstanding Trivy findings based on current scan evidence.
