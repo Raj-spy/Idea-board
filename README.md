@@ -366,3 +366,6 @@ Do not use the test project name for any stack with data you want to keep. `npm 
 ## Future improvements
 
 Configure encrypted remote Terraform state and locking; deploy the application to EKS with Helm and managed secret delivery; add a public ingress/TLS design; define and validate a cloud-agnostic interface only when a second provider is implemented; and resolve outstanding Trivy findings based on current scan evidence.
+
+### CI Verification
+Automated checks run through GitHub Actions.
